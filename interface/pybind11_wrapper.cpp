@@ -144,6 +144,7 @@ const std::type_index GERG2004ResidualModel_i{std::type_index(typeid(GERG2004::G
 const std::type_index GERG2008ResidualModel_i{std::type_index(typeid(GERG2008::GERG2008ResidualModel))};
 using CPA_t = decltype(teqp::CPA::CPAfactory(""));
 const std::type_index CPA_i{std::type_index(typeid(CPA_t))};
+const std::type_index MieElong_i{ std::type_index(typeid(MieElong_t)) };
 
 /**
  At runtime we can add additional model-specific methods that only apply for a particular model.  We take in a Python-wrapped

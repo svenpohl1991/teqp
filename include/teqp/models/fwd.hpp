@@ -28,6 +28,7 @@
 #include "teqp/models/mie/mie.hpp"
 #include "teqp/models/GERG/GERG.hpp"
 #include "teqp/models/LKP.hpp"
+#include "teqp/models/mie/mie_variable.hpp"
 
 namespace teqp {
 
@@ -51,6 +52,8 @@ namespace teqp {
     using LJ126Johnson1993_t = LJ126Johnson1993;
     using Mie6Pohl2023_t = Mie::Mie6Pohl2023;
     using QuantumPR_t = QuantumCorrectedPR;
+	using MieElong_t = Mie::MieElong;
+
 
     using idealgas_t = IdealHelmholtz;
 

@@ -5,6 +5,7 @@
 #include "teqp/models/model_potentials/2center_ljf.hpp"
 
 #include "teqp/models/mie/mie.hpp"
+#include "teqp/models/mie/mie_variable.hpp"
 
 namespace teqp{
     namespace cppinterface{
@@ -28,5 +29,9 @@ namespace teqp{
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_2CLJF_Quadrupole(const nlohmann::json &spec){
             return make_owned(twocenterljf::build_two_center_model_quadrupole(spec.at("author"), spec.at("L^*"), spec.at("(Q^*)^2")));
         }
+        std::unique_ptr<teqp::cppinterface::AbstractModel> make_Mie_Variable(const nlohmann::json& spec) {
+            return make_owned(Mie::MieElong(spec.at("model_path"), spec.at("components"), spec.at("combination"), spec.at("kij")));
+        }
+        
     }
 }

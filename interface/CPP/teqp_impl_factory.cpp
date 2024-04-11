@@ -31,6 +31,7 @@ namespace teqp {
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_Mie_Chaparro2023(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_2CLJF_Dipole(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_2CLJF_Quadrupole(const nlohmann::json &);
+        std::unique_ptr<teqp::cppinterface::AbstractModel> make_Mie_Variable(const nlohmann::json&);
     
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_CPA(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_IdealHelmholtz(const nlohmann::json &);
@@ -79,7 +80,8 @@ namespace teqp {
             {"Mie_Chaparro2023", [](const nlohmann::json& spec){ return make_Mie_Chaparro2023(spec); }},
             {"2CLJF-Dipole", [](const nlohmann::json& spec){ return make_2CLJF_Dipole(spec); }},
             {"2CLJF-Quadrupole", [](const nlohmann::json& spec){ return make_2CLJF_Quadrupole(spec); }},
-            
+            {"MieElong",         [](const nlohmann::json& spec){ return make_Mie_Variable(spec);     }},
+
             {"CPA", [](const nlohmann::json& spec){ return make_CPA(spec); }},
             
             {"IdealHelmholtz", [](const nlohmann::json& spec){ return make_IdealHelmholtz(spec); }},
