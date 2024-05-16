@@ -8,8 +8,8 @@ namespace cppinterface{
  */
 struct IterationMatrices{
     std::vector<char> vars; ///< The set of variables matching the rows in the Jacobian
-    Eigen::ArrayXXd J; ///< The Jacobian
-    Eigen::ArrayXd v; ///< The values of the thermodynamic variables matching the variables in vars
+    Eigen::Array22d J; ///< The Jacobian
+    Eigen::Array2d v; ///< The values of the thermodynamic variables matching the variables in vars
 };
 
 /**
@@ -25,11 +25,11 @@ struct IterationMatrices{
  */
 template<typename Array>
 auto build_iteration_Jv(const std::vector<char>& vars, const Eigen::Array<double, 3, 3>& Ar, const Eigen::Array<double, 3, 3>& Aig, const double R, const double T, const double rho, const Array &z){
-    IterationMatrices im; im.J.resize(vars.size(), 2); im.v.resize(vars.size()); im.vars = vars;
+    IterationMatrices im; im.vars = vars;
     
     auto A = Ar + Aig;
-    Eigen::ArrayXd& v = im.v;
-    Eigen::ArrayXXd& J = im.J;
+    Eigen::Array2d& v = im.v;
+    Eigen::Array22d& J = im.J;
     auto Trecip = 1.0/T;
     auto dTrecipdT = -Trecip*Trecip;
     
@@ -49,6 +49,7 @@ auto build_iteration_Jv(const std::vector<char>& vars, const Eigen::Array<double
     auto d2alphadrho2 = [&](){ return A(0,2)/(rho*rho); };
     //
     // Derivatives of total Helmholtz energy a in terms of derivatives of alpha
+    auto a = [&](){ return alpha()*R*T; };
     auto dadTrecip = [&](){ return R/(Trecip*Trecip)*(Trecip*dalphadTrecip()-alpha());};
     auto d2adTrecip2 = [&](){ return R/(Trecip*Trecip*Trecip)*(Trecip*Trecip*d2alphadTrecip2()-2*Trecip*dalphadTrecip()+2*alpha());};
     auto dadrho = [&](){return R/Trecip*(dalphadrho());};
@@ -76,6 +77,11 @@ auto build_iteration_Jv(const std::vector<char>& vars, const Eigen::Array<double
                 v(i) = Trecip*Trecip*dadTrecip();
                 J(i, 0) = (Trecip*Trecip*d2adTrecip2() + 2*Trecip*dadTrecip())*dTrecipdT;
                 J(i, 1) = Trecip*Trecip*d2adTrecipdrho();
+                break;
+            case 'H':
+                v(i) = a() + Trecip*dadTrecip() + rho*dadrho();
+                J(i, 0) = (Trecip*d2adTrecip2() + rho*d2adTrecipdrho() + 2*dadTrecip())*dTrecipdT;
+                J(i, 1) = (Trecip*d2adTrecipdrho() + rho*d2adrho2() + 2*dadrho());
                 break;
             default:
                 throw std::invalid_argument("bad var: " + std::to_string(vars[i]));

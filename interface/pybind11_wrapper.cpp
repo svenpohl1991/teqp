@@ -485,6 +485,10 @@ void init_teqp(py::module& m) {
         #define X(i) .def(stringify(get_Ar0 ## i ## n), &am::get_Ar0 ## i ## n, "T"_a, "rho"_a, "molefrac"_a.noconvert())
             AR0N_args
         #undef X
+        // And like get_Ar10n, get_Ar20n, ....
+        #define X(i) .def(stringify(get_Ar ## i ## 0n), &am::get_Ar ## i ## 0n, "T"_a, "rho"_a, "molefrac"_a.noconvert())
+            ARN0_args
+        #undef X
         .def("get_neff", &am::get_neff, "T"_a, "rho"_a, "molefrac"_a.noconvert())
     
         // Methods that come from the isochoric derivatives formalism
@@ -542,8 +546,10 @@ void init_teqp(py::module& m) {
     
     using namespace teqp::iteration;
     py::class_<NRIterator>(m, "NRIterator")
-        .def(py::init<const AbstractModel *, const AbstractModel *, const std::vector<char>&, const Eigen::Ref<const Eigen::ArrayXd>&, double, double, const Eigen::Ref<const Eigen::ArrayXd>&>())
+        .def(py::init<const AbstractModel *, const AbstractModel *, const std::vector<char>&, const Eigen::ArrayXd&, double, double, const Eigen::Ref<const Eigen::ArrayXd>&>())
+        .def("calc_step", &NRIterator::calc_step)
         .def("take_step", &NRIterator::take_step)
+        .def("take_step_getmaxabsr", &NRIterator::take_step_getmaxabsr)
         .def("take_steps", &NRIterator::take_steps)
         .def("get_vars", &NRIterator::get_vars)
         .def("get_vals", &NRIterator::get_vals)
