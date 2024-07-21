@@ -149,13 +149,8 @@ namespace teqp {
             return static_cast<T>(x2 * x2);
         }
         if (n < 0) {
-            using namespace autodiff::detail;
-            if constexpr (isDual<T> || isExpr<T>) {
-                return eval(powi(eval(1.0 / x), -n));
-            }
-            else {
-                return powi(static_cast<T>(1.0) / x, -n);
-            }
+            T xrecip = 1.0/x;
+            return powi(xrecip, -n);
         }
         else {
             T y(x), xpwr(x);
@@ -182,6 +177,11 @@ namespace teqp {
         }
         return o;
         //return e.cast<T>().unaryExpr([&x](const auto& e_) {return powi(x, e_); }).eval();
+    }
+
+    template<typename T>
+    inline auto powIVd(const T& x, const Eigen::ArrayXd& e) {
+        return e.cast<T>().unaryExpr([&x](const auto& e_) {return forceeval(pow(x, e_)); }).eval();
     }
 
     //template<typename T>

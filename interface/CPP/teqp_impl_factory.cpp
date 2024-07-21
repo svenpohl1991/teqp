@@ -14,6 +14,8 @@ namespace teqp {
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_SAFTVRMie(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_PCSAFT(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_PCSAFTPureGrossSadowski2001(const nlohmann::json &);
+        std::unique_ptr<teqp::cppinterface::AbstractModel> make_SOFTSAFT(const nlohmann::json &);
+        std::unique_ptr<teqp::cppinterface::AbstractModel> make_genericSAFT(const nlohmann::json &);
     
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_GERG2004resid(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_GERG2008resid(const nlohmann::json &);
@@ -31,6 +33,7 @@ namespace teqp {
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_EXP6_Kataoka1992(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_Mie_Pohl2023(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_Mie_Chaparro2023(const nlohmann::json &);
+        std::unique_ptr<teqp::cppinterface::AbstractModel> make_2CLJF(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_2CLJF_Dipole(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_2CLJF_Quadrupole(const nlohmann::json &);
         std::unique_ptr<teqp::cppinterface::AbstractModel> make_Mie_Variable(const nlohmann::json&);
@@ -62,6 +65,8 @@ namespace teqp {
             
             {"PCSAFT", [](const nlohmann::json& spec){ return make_PCSAFT(spec); }},
             {"PCSAFTPureGrossSadowski2001", [](const nlohmann::json& spec){ return make_PCSAFTPureGrossSadowski2001(spec); }},
+            {"SoftSAFT", [](const nlohmann::json& spec){ return make_SOFTSAFT(spec); }},
+            {"genericSAFT", [](const nlohmann::json& spec){ return make_genericSAFT(spec); }},
             
             {"GERG2004resid", [](const nlohmann::json& spec){ return make_GERG2004resid(spec);}},
             {"GERG2008resid", [](const nlohmann::json& spec){ return make_GERG2008resid(spec);}},
@@ -73,14 +78,15 @@ namespace teqp {
             {"multifluid", [](const nlohmann::json& spec){ return make_multifluid(spec);}},
             {"multifluid-ECS-HuberEly1994", [](const nlohmann::json& spec){ return make_multifluid_ECS_HuberEly1994(spec);}},
             {"AmmoniaWaterTillnerRoth", [](const nlohmann::json& /*spec*/){ return make_AmmoniaWaterTillnerRoth();}},
+            
             {"LJ126_TholJPCRD2016", [](const nlohmann::json& /*spec*/){ return make_LJ126_TholJPCRD2016();}},
             {"LJ126_KolafaNezbeda1994", [](const nlohmann::json& /*spec*/){ return make_LJ126_KolafaNezbeda1994();}},
             {"LJ126_Johnson1993", [](const nlohmann::json& /*spec*/){ return make_LJ126_Johnson1993();}},
-            
             {"SW_EspindolaHeredia2009",  [](const nlohmann::json& spec){ return make_SW_EspindolaHeredia2009(spec);}},
             {"EXP6_Kataoka1992", [](const nlohmann::json& spec){ return make_EXP6_Kataoka1992(spec); }},
             {"Mie_Pohl2023", [](const nlohmann::json& spec){ return make_Mie_Pohl2023(spec); }},
             {"Mie_Chaparro2023", [](const nlohmann::json& spec){ return make_Mie_Chaparro2023(spec); }},
+            {"2CLJF", [](const nlohmann::json& spec){ return make_2CLJF(spec); }},
             {"2CLJF-Dipole", [](const nlohmann::json& spec){ return make_2CLJF_Dipole(spec); }},
             {"2CLJF-Quadrupole", [](const nlohmann::json& spec){ return make_2CLJF_Quadrupole(spec); }},
             {"MieElong",         [](const nlohmann::json& spec){ return make_Mie_Variable(spec);     }},
