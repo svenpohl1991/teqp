@@ -1,0 +1,648 @@
+#include "teqp/models/multifluid.hpp"
+#include <Eigen/Dense>
+#include <math.h>
+#include "teqp/models/cubics.hpp"
+#include <algorithm>
+#include <cctype>
+#include <iostream>
+#include <string>
+#include <vector>
+
+namespace teqp {
+	namespace Mie {
+
+		enum combining_rule { ONEFLUID, ONEFLUID_RED, ONEFLUID_RED_LINEAR, ONEFLUID_DENSE, LINEAR, LORENTZ, STRUCTURE_BASED };
+
+		inline auto linear_mixing(const double& x, const double& y) {
+			return (x + y) / 2.0;
+		}
+
+		inline auto l_to_m(const double& L_star) {
+			return 1. + 0.2177 * L_star + 3.1498 * L_star * L_star - 3.6738 * L_star * L_star * L_star + 1.3063 * L_star * L_star * L_star * L_star;
+		}
+
+
+		//template<typename PTYPE, typename BTYPE, typename GTYPE, typename MOLTYPE>
+		//inline auto reducing_func(const PTYPE & p, const BTYPE & b, const GTYPE & g, const PTYPE &,const MOLTYPE & molefrac){
+		//	using resulttype = std::common_type_t<decltype(molefrac[0])>;
+		//	resulttype val = 0.0;
+		//	for (size_t i = 0; i < molefrac.size(); i++) {
+		//		val = val + molefrac[i] * molefrac[i] * p(i);
+		//	}
+		//	val = val + 2.0 * molefrac[0] * molefrac[1] * b * g * (molefrac[0] + molefrac[1]) / (b * b * molefrac[0] + molefrac[1]) * sqrt(p(0) * p(1));
+		//	return val;
+		//};
+
+		//template<typename PTYPE, typename BTYPE, typename GTYPE, typename MOLTYPE>
+		//inline auto reducing_func_d(const PTYPE & p, const BTYPE & b, const GTYPE & g, const PTYPE &,const MOLTYPE & molefrac){
+		//	using resulttype = std::common_type_t<decltype(molefrac[0])>;
+		//	resulttype val = 0.0;
+		//	for (size_t i = 0; i < molefrac.size(); i++) {
+		//		val = val + molefrac[i] * molefrac[i] / p(i);
+		//	}
+		//	val = val + 2.0 * molefrac[0] * molefrac[1] * b * g * (molefrac[0] + molefrac[1]) / (b * b * molefrac[0] + molefrac[1]) * 0.125 * pow(1.0 / pow(p(0), 1.0 / 3.0) + 1.0 / pow(p(1), 1.0 / 3.0), 3.0);
+		//	return val;
+		//};
+
+
+
+
+		class AncTerm {
+		public:
+			Eigen::ArrayXd n, t;
+			double tred, dred;
+			std::string type;
+		};
+
+		struct fluid {
+			double lambdas, epsilons, sigmas, m, I, L_star;
+			AncTerm anc_dl, anc_dv;
+			bool is_sphere;
+		};
+
+		// Combining rules for one fluid approximation
+		// (1) Simple Van der Waals one fluid combininb rule
+		template<typename RHOTYPE, typename MoleFracType>
+		inline auto combining_rules_one_fluid(RHOTYPE& rhostar, MoleFracType& molefrac, std::vector<fluid> f, const bool& is_spherical, Eigen::ArrayXXd k_mat_l, Eigen::ArrayXXd k_mat_s, Eigen::ArrayXXd k_mat_e, Eigen::ArrayXd gammat, Eigen::ArrayXd betat, Eigen::ArrayXd gamma_dense, combining_rule mix_rule) {
+			auto ncomp = f.size();
+			using resulttype = std::common_type_t<decltype(molefrac[0]), decltype(rhostar)>;
+			using rhotype = std::common_type_t<decltype(rhostar)>;
+			std::vector<std::vector<resulttype>> sigma_ij(ncomp, std::vector<resulttype>(ncomp, 0.0));
+			std::vector<std::vector<resulttype>> eps_ij(ncomp, std::vector<resulttype>(ncomp, 0.0));
+			std::vector<std::vector<resulttype>> lambda_ij(ncomp, std::vector<resulttype>(ncomp, 0.0));
+			std::vector<resulttype> m_mixed(ncomp, 0.0);
+			resulttype m_mix = 0.0;
+			resulttype L_mix = 0.0;
+			resulttype sigma_mean = 0.0;
+			resulttype sigma_mean_gamma = 0.0;
+			resulttype epsilon_mean = 0.0;
+			resulttype lambda_mean = 0.0;
+
+			if (is_spherical) {
+				m_mix = 1.0;
+			}
+			else
+			{
+				for (auto i = 0; i < ncomp; i++) {
+					m_mix += f[i].m * molefrac[i];
+				}
+			}
+			for (auto i = 0; i < ncomp; i++) {
+				L_mix += f[i].L_star * molefrac[i];
+			}
+
+			Eigen::ArrayXd sig_;
+			Eigen::ArrayXd lambda_;
+			Eigen::ArrayXd epsilon_;
+
+			auto red_func = [molefrac](auto p, auto b, auto g) {
+				resulttype val = 0.0;
+				for (size_t i = 0; i < molefrac.size(); i++) {
+					val = val + molefrac[i] * molefrac[i] * p(i);
+				}
+				val = val + 2.0 * molefrac[0] * molefrac[1] * b * g * (molefrac[0] + molefrac[1]) / (b * b * molefrac[0] + molefrac[1]) * sqrt(p(0) * p(1));
+				return val;
+			};
+
+			auto red_func_d = [molefrac](auto p, auto b, auto g) {
+				resulttype val = 0.0;
+				for (size_t i = 0; i < molefrac.size(); i++) {
+					val = val + molefrac[i] * molefrac[i] / p(i);
+				}
+				val = val + 2.0 * molefrac[0] * molefrac[1] * b * g * (molefrac[0] + molefrac[1]) / (b * b * molefrac[0] + molefrac[1]) * 0.125 * pow(1.0 / pow(p(0), 1.0 / 3.0) + 1.0 / pow(p(1), 1.0 / 3.0), 3.0);
+
+				return val;
+			};
+
+			// Switch between combing rules for interaction of molecular parameters
+			switch (mix_rule) {
+			case ONEFLUID:
+				if (ncomp > 1) {
+					for (auto i = 0; i < ncomp; i++) {
+						for (auto j = 0; j < ncomp; j++) {
+							lambda_ij[i][j] = (1.0 - k_mat_l(i, j)) * sqrt((f[i].lambdas - 3.0) * (f[j].lambdas - 3.0)) + 3.0;
+							sigma_ij[i][j] = (1.0 - k_mat_s(i, j)) * linear_mixing(f[i].sigmas, f[j].sigmas);
+							eps_ij[i][j] = (1.0 - k_mat_e(i, j)) * sqrt(pow(f[i].sigmas, 3.0) * pow(f[j].sigmas, 3.0)) / pow(sigma_ij[i][j], 3.0) * sqrt(f[i].epsilons * f[j].epsilons);
+						}
+					}
+					// Calculate the mean values for the one fluid approximation
+					for (auto i = 0; i < ncomp; i++) { for (auto j = 0; j < ncomp; j++) { sigma_mean += molefrac[i] * molefrac[j] * f[i].m * f[j].m * pow(sigma_ij[i][j], 3.0); } }
+					for (auto i = 0; i < ncomp; i++) { for (auto j = 0; j < ncomp; j++) { epsilon_mean += molefrac[i] * molefrac[j] * f[i].m * f[j].m * pow(sigma_ij[i][j], 3.0) * eps_ij[i][j]; } }
+					for (auto i = 0; i < ncomp; i++) { for (auto j = 0; j < ncomp; j++) { lambda_mean += molefrac[i] * molefrac[j] * f[i].m * f[j].m * pow(sigma_ij[i][j], 3.0) * eps_ij[i][j] * lambda_ij[i][j]; } }
+
+					lambda_mean = lambda_mean / epsilon_mean;
+					epsilon_mean = epsilon_mean / sigma_mean;
+					sigma_mean = pow(sigma_mean / pow(m_mix, 2.0), 1.0 / 3.0);
+
+				}
+				else
+				{
+					sigma_mean = f[0].sigmas;
+					epsilon_mean = f[0].epsilons;
+					lambda_mean = f[0].lambdas;
+				}
+				break;
+
+
+			case ONEFLUID_RED:
+				// so far only for binary mixtures available!
+				if (ncomp > 1) {
+					sig_ = (Eigen::ArrayXd(2) << f[0].sigmas, f[1].sigmas).finished();
+					lambda_ = (Eigen::ArrayXd(2) << f[0].lambdas, f[1].lambdas).finished();
+					epsilon_ = (Eigen::ArrayXd(2) << f[0].epsilons, f[1].epsilons).finished();
+					sigma_mean = 1.0 / red_func_d(sig_, betat[0], gammat[0]);
+					epsilon_mean = red_func(epsilon_, betat[1], gammat[1]);
+					lambda_mean = red_func(lambda_, betat[2], gammat[2]);
+				}
+				else
+				{
+					sigma_mean = f[0].sigmas;
+					epsilon_mean = f[0].epsilons;
+					lambda_mean = f[0].lambdas;
+				}
+				break;
+			default:
+				break;
+			}
+
+			return std::make_tuple(sigma_mean, epsilon_mean, lambda_mean, m_mix, L_mix);
+		}
+
+		template<typename Model>
+		auto get_vle_pure_start(const Model& model, double& T, const int idx) {
+			return get_sat_dense(T, model, idx);
+		}
+
+		const  double kBoltz = 1.380649E-23;
+		const double NAvo = 6.02214076E23;
+
+		class MieElong {
+
+		private:
+
+			const  double kBoltz = 1.380649E-23;
+			const double NAvo = 6.02214076E23;
+			using EArray6 = Eigen::Array<double, 6, 1>;
+			using EArray4 = Eigen::Array<double, 4, 1>;
+
+
+			Eigen::ArrayXd c1_pol;
+			Eigen::ArrayXd c1_exp;
+			Eigen::ArrayXd c1_gbs;
+			Eigen::ArrayXd c2_pol;
+			Eigen::ArrayXd c2_exp;
+			Eigen::ArrayXd c2_gbs;
+			Eigen::ArrayXd t_pol;
+			Eigen::ArrayXd t_exp;
+			Eigen::ArrayXd t_gbs;
+			Eigen::ArrayXd d_pol;
+			Eigen::ArrayXd d_exp;
+			Eigen::ArrayXd d_gbs;
+			Eigen::ArrayXd p;
+			Eigen::ArrayXd eta;
+			Eigen::ArrayXd beta;
+			Eigen::ArrayXd gam;
+			Eigen::ArrayXd eps;
+			Eigen::ArrayXd tc_p;
+			Eigen::ArrayXd dc_p;
+			Eigen::ArrayXd alpha_p;
+
+			Eigen::ArrayXd d1_pol;
+			Eigen::ArrayXd d2_pol;
+			Eigen::ArrayXd d3_pol;
+			Eigen::ArrayXd d1_exp;
+			Eigen::ArrayXd d2_exp;
+			Eigen::ArrayXd d3_exp;
+			Eigen::ArrayXd d1_gbs;
+			Eigen::ArrayXd d2_gbs;
+			Eigen::ArrayXd d3_gbs;
+			Eigen::ArrayXd t_pol_m;
+			Eigen::ArrayXd t_exp_m;
+			Eigen::ArrayXd t_gbs_m;
+			Eigen::ArrayXd d_pol_m;
+			Eigen::ArrayXd d_exp_m;
+			Eigen::ArrayXd d_gbs_m;
+			Eigen::ArrayXd o_pol;
+			Eigen::ArrayXd o_exp;
+			Eigen::ArrayXd o_gbs;
+			Eigen::ArrayXd p_m;
+			Eigen::ArrayXd eta_m;
+			Eigen::ArrayXd beta_m;
+			Eigen::ArrayXd gam_m;
+			Eigen::ArrayXd eps_m;
+
+			int nr_fld;
+			bool is_sphere;
+
+			Eigen::ArrayXd kij_vec, betat, gammat, gamma_dense;
+			Eigen::ArrayXXd k_mat_lambda, k_mat_sigma, k_mat_epsilon;
+			combining_rule mix_rule;
+			std::map<std::string, combining_rule>  comb_rule = { {"one-fluid",ONEFLUID} , {"one-fluid-red",ONEFLUID_RED} , {"one-fluid-linear",ONEFLUID_RED_LINEAR} , {"structure",STRUCTURE_BASED} };
+		public:
+
+			std::vector<fluid> fld;
+
+			MieElong(const std::string& path, const std::vector<std::string>& fluids, const std::string& combining_rule_in, const std::vector<double>& kij = {}) {
+
+				std::string filepath = std::filesystem::is_regular_file(path) ? path : path;
+				nlohmann::json j = load_a_JSON_file(filepath);
+				std::string combining_rule = combining_rule_in;
+				auto nr_fluids = fluids.size();
+				std::transform(combining_rule.begin(), combining_rule.end(), combining_rule.begin(), [](unsigned char c) { return std::tolower(c); });
+
+
+				try {
+					// Attempt to access the map with the user's input
+					int value = comb_rule.at(combining_rule);
+					mix_rule = comb_rule[combining_rule];
+				}
+				catch (const std::out_of_range& e) {
+					// Handle the exception when the key is not found
+					std::cerr << "Error: " << e.what() << " is not a valid mixing rule." << std::endl;
+				}
+
+				fld.resize(fluids.size());
+				int i = 0;
+				for (auto f : fluids)
+				{
+					fld[i].lambdas = j.at("mie").at(f).at("lambda");
+					fld[i].epsilons = j.at("mie").at(f).at("epsilon");
+					fld[i].sigmas = j.at("mie").at(f).at("sigma");
+					fld[i].L_star = j.at("mie").at(f).at("L");
+					fld[i].m = l_to_m(fld[i].L_star);
+					fld[i].I = j.at("mie").at(f).at("I");
+					i++;
+				}
+
+				nr_fld = fluids.size();
+				is_sphere = true;
+
+				// check if only sphericals are included
+				for (size_t i = 0; i < nr_fld; i++)
+				{
+					if (fld[i].L_star > 0.0) {
+						is_sphere = false;
+					}
+				}
+
+				//if (!is_sphere) {
+				//	for (size_t i = 0; i < nr_fld; i++)
+				//	{
+				//		if (fld[i].L_star == 0.0) {
+				//			fld[i].epsilons = fld[i].epsilons / 4.;
+				//		}
+				//	}
+				//}
+
+				auto spec = j.at("mie").at("parameter");
+
+				// #######################
+				// Read mie parameter for spherical part
+				// #######################
+				auto n_pol = static_cast<int>(spec.at("c1_pol").size());
+				auto n_exp = static_cast<int>(spec.at("c1_exp").size());
+				auto n_gbs = static_cast<int>(spec.at("c1_gbs").size());
+				c1_pol = toeig(spec.at("c1_pol")).head(n_pol);
+				c1_exp = toeig(spec.at("c1_exp")).head(n_exp);
+				c1_gbs = toeig(spec.at("c1_gbs")).head(n_gbs);
+				c2_pol = toeig(spec.at("c2_pol")).head(n_pol);
+				c2_exp = toeig(spec.at("c2_exp")).head(n_exp);
+				c2_gbs = toeig(spec.at("c2_gbs")).head(n_gbs);
+				t_pol = toeig(spec.at("t_pol")).head(n_pol);
+				t_exp = toeig(spec.at("t_exp")).head(n_exp);
+				t_gbs = toeig(spec.at("t_gbs")).head(n_gbs);
+				d_pol = toeig(spec.at("d_pol")).head(n_pol);
+				d_exp = toeig(spec.at("d_exp")).head(n_exp);
+				d_gbs = toeig(spec.at("d_gbs")).head(n_gbs);
+				p = toeig(spec.at("p")).head(n_exp);
+				eta = toeig(spec.at("eta")).head(n_gbs);
+				beta = toeig(spec.at("beta")).head(n_gbs);
+				gam = toeig(spec.at("gam")).head(n_gbs);
+				eps = toeig(spec.at("eps")).head(n_gbs);
+
+				auto n_tc = static_cast<int>(spec.at("tc_p").size());
+				auto n_dc = static_cast<int>(spec.at("dc_p").size());
+				tc_p = toeig(spec.at("tc_p")).head(n_tc);
+				dc_p = toeig(spec.at("dc_p")).head(n_dc);
+
+
+				// #######################
+				// Read mie parameter for elongated part
+				// #######################
+				auto n_pol_m = static_cast<int>(spec.at("d1_pol").size());
+				auto n_exp_m = static_cast<int>(spec.at("d1_exp").size());
+				auto n_gbs_m = static_cast<int>(spec.at("d1_gbs").size());
+				auto n_alpha = static_cast<int>(spec.at("alpha_p").size());
+				d1_pol = toeig(spec.at("d1_pol")).head(n_pol_m);
+				d2_pol = toeig(spec.at("d2_pol")).head(n_pol_m);
+				d3_pol = toeig(spec.at("d3_pol")).head(n_pol_m);
+				d1_exp = toeig(spec.at("d1_exp")).head(n_exp_m);
+				d2_exp = toeig(spec.at("d2_exp")).head(n_exp_m);
+				d3_exp = toeig(spec.at("d3_exp")).head(n_exp_m);
+				d1_gbs = toeig(spec.at("d1_gbs")).head(n_gbs_m);
+				d2_gbs = toeig(spec.at("d2_gbs")).head(n_gbs_m);
+				d3_gbs = toeig(spec.at("d3_gbs")).head(n_gbs_m);
+				t_pol_m = toeig(spec.at("t_pol_m")).head(n_pol_m);
+				t_exp_m = toeig(spec.at("t_exp_m")).head(n_exp_m);
+				t_gbs_m = toeig(spec.at("t_gbs_m")).head(n_gbs_m);
+				d_pol_m = toeig(spec.at("d_pol_m")).head(n_pol_m);
+				d_exp_m = toeig(spec.at("d_exp_m")).head(n_exp_m);
+				d_gbs_m = toeig(spec.at("d_gbs_m")).head(n_gbs_m);
+				/*o_pol = toeig(spec.at("o_pol")).head(n_pol_m);
+				o_exp = toeig(spec.at("o_exp")).head(n_exp_m);
+				o_gbs = toeig(spec.at("o_gbs")).head(n_gbs_m);*/
+				p_m = toeig(spec.at("p_m")).head(n_exp_m);
+				eta_m = toeig(spec.at("eta_m")).head(n_gbs_m);
+				beta_m = toeig(spec.at("beta_m")).head(n_gbs_m);
+				gam_m = toeig(spec.at("gam_m")).head(n_gbs_m);
+				eps_m = toeig(spec.at("eps_m")).head(n_gbs_m);
+				alpha_p = toeig(spec.at("alpha_p")).head(n_alpha);
+
+
+				k_mat_lambda = Eigen::ArrayXXd::Zero(nr_fluids, nr_fluids);
+				k_mat_sigma = Eigen::ArrayXXd::Zero(nr_fluids, nr_fluids);
+				k_mat_epsilon = Eigen::ArrayXXd::Zero(nr_fluids, nr_fluids);
+
+				// Binary interaction parameter
+				if (kij.size() == 0) {
+					// Check if a mixture is present
+					if (nr_fluids > 1) {
+						if (mix_rule == ONEFLUID || mix_rule == ONEFLUID_DENSE) {
+							auto spec_mix = j.at("kij");
+							// Find fluids
+							for (size_t i = 0; i < nr_fluids - 1; i++) {
+								for (size_t k = i + 1; k < nr_fluids; k++) {
+									// build name combinations
+									std::string name1 = fluids[i] + "-" + fluids[k];
+									std::string name2 = fluids[k] + "-" + fluids[i];
+									if (spec_mix.contains(name1)) {
+										//kij_vec = toeig(spec_mix.at(name1)).head(3);
+										auto kmat_loc = spec_mix.at(name1);
+										k_mat_lambda(i, k) = kmat_loc[0];
+										k_mat_lambda(k, i) = kmat_loc[0];
+										k_mat_sigma(i, k) = kmat_loc[1];
+										k_mat_sigma(k, i) = kmat_loc[1];
+										k_mat_epsilon(i, k) = kmat_loc[2];
+										k_mat_epsilon(k, i) = kmat_loc[2];
+									}
+									else if (spec_mix.contains(name2)) {
+										//kij_vec = toeig(spec_mix.at(name2)).head(3);
+										auto kmat_loc = spec_mix.at(name2);
+										k_mat_lambda(i, k) = kmat_loc[0];
+										k_mat_lambda(k, i) = kmat_loc[0];
+										k_mat_sigma(i, k) = kmat_loc[1];
+										k_mat_sigma(k, i) = kmat_loc[1];
+										k_mat_epsilon(i, k) = kmat_loc[2];
+										k_mat_epsilon(k, i) = kmat_loc[2];
+									}
+								}
+							}
+						}
+						else if (mix_rule == ONEFLUID_RED) {
+							auto spec_mix = j.at("one_fluid_red");
+							for (size_t i = 0; i < nr_fluids - 1; i++) {
+								for (size_t k = i + 1; k < nr_fluids; k++) {
+									// build name combinations
+									std::string name1 = fluids[i] + "-" + fluids[k];
+									std::string name2 = fluids[k] + "-" + fluids[i];
+									if (spec_mix.contains(name1)) {
+										auto parameter = spec_mix.at(name1);
+										betat = toeig(parameter.at("betat")).head(3);
+										gammat = toeig(parameter.at("gammat")).head(3);
+									}
+									else if (spec_mix.contains(name2)) {
+										auto parameter = spec_mix.at(name2);
+										betat = toeig(parameter.at("betat")).head(3);
+										gammat = toeig(parameter.at("gammat")).head(3);
+									}
+								}
+							}
+						}
+					}
+					else {
+						kij_vec = (Eigen::ArrayXd(3) << 0.0, 0.0, 0.0).finished();
+					}
+				}
+				else
+				{
+					if (mix_rule == ONEFLUID) {
+						for (size_t i = 0; i < nr_fluids - 1; i++) {
+							for (size_t k = i + 1; k < nr_fluids; k++) {
+								k_mat_lambda(i, k) = kij[0];
+								k_mat_lambda(k, i) = kij[0];
+								k_mat_sigma(i, k) = kij[1];
+								k_mat_sigma(k, i) = kij[1];
+								k_mat_epsilon(i, k) = kij[2];
+								k_mat_epsilon(k, i) = kij[2];
+							}
+						}
+					}
+					else if (mix_rule == ONEFLUID_RED) {
+						betat = (Eigen::ArrayXd(3) << kij[0], kij[1], kij[2]).finished();
+						gammat = (Eigen::ArrayXd(3) << kij[3], kij[4], kij[5]).finished();
+					}
+					else if (mix_rule == ONEFLUID_DENSE) {
+						gamma_dense = (Eigen::ArrayXd(1) << kij[0]).finished();
+					}
+				}
+			}
+
+			template<typename MoleFracType>
+			auto R(const MoleFracType&) const { return NAvo * kBoltz; }
+
+
+			template<typename ETYPE, typename LTYPE, typename MTYPE>
+			inline auto get_tc(const ETYPE& epsilon, const LTYPE& lambda, const MTYPE& L_star) const {
+				auto factor = 4.0;
+				//if (is_sphere) {
+				//	factor = 1.0;
+				//}
+				return factor * epsilon * (tc_p[0] + tc_p[1] / lambda + tc_p[2] / (lambda * lambda * lambda)) *
+					(1.0 + tc_p[3] * L_star * lambda + tc_p[4] * L_star * L_star * lambda + tc_p[5] * L_star * L_star * L_star * lambda) /
+					(1.0 + tc_p[6] * L_star * lambda + tc_p[7] * L_star * L_star * lambda + tc_p[8] * L_star * L_star * L_star * lambda);
+			}
+
+			template<typename STYPE, typename LTYPE, typename MTYPE>
+			inline auto get_dc(const STYPE& s, const LTYPE& lambda, const MTYPE& L_star) const {
+				return 1E3 * (dc_p[0] + dc_p[1] * log(lambda) / log(10.0)) *
+					(1.0 + dc_p[2] * L_star + dc_p[3] * L_star * L_star * lambda * lambda) /
+					(1.0 + dc_p[4] * L_star * lambda + dc_p[5] * L_star * L_star * lambda * lambda)
+					* 1E27 / (NAvo * pow(s, 3.0));
+			}
+
+			template<typename LTYPE, typename MTYPE>
+			inline auto get_alpha(const LTYPE& lambda, const MTYPE& L_star) const {
+				return alpha_p[0] + alpha_p[1] * L_star + alpha_p[2] * lambda + alpha_p[3] * pow(L_star, 2.0) + alpha_p[4] * L_star * lambda + alpha_p[5] * pow(L_star, 3.0) + alpha_p[6] * pow(L_star, 2.0) * lambda;
+			}
+
+			template<typename DELTATYPE, typename TAUTYPE, typename LAMBDATYPE>
+			inline auto get_spherical_contribution(const DELTATYPE& delta, const TAUTYPE& tau, const LAMBDATYPE& lambda) const {
+				using resulttype = std::common_type_t<DELTATYPE, TAUTYPE>;
+				// Calculate coefficients for spherical part
+				std::vector<resulttype> n_pol(t_pol.size()), n_exp(t_exp.size()), n_gbs(t_gbs.size());
+
+				for (size_t i = 0; i < t_pol.size(); i++) {
+					n_pol[i] = c1_pol[i] + c2_pol[i] / lambda;
+				}
+				for (size_t i = 0; i < t_exp.size(); i++) {
+					n_exp[i] = c1_exp[i] + c2_exp[i] / lambda;
+				}
+				for (size_t i = 0; i < t_gbs.size(); i++) {
+					n_gbs[i] = c1_gbs[i] + c2_gbs[i] / lambda;
+				}
+
+				std::vector<resulttype> pol(t_pol.size()), exp_(t_exp.size()), gbs(t_gbs.size());
+				for (size_t i = 0; i < t_pol.size(); i++) {
+					pol[i] = n_pol[i] * pow(tau, t_pol[i]) * pow(delta, d_pol[i]);
+				}
+				for (size_t i = 0; i < t_exp.size(); i++) {
+					exp_[i] = n_exp[i] * pow(tau, t_exp[i]) * pow(delta, d_exp[i]) * exp(-pow(delta, p[i]));
+				}
+				for (size_t i = 0; i < t_gbs.size(); i++) {
+					gbs[i] = n_gbs[i] * pow(tau, t_gbs[i]) * pow(delta, d_gbs[i]) * exp(-eta[i] * (delta - eps[i]) * (delta - eps[i]) - beta[i] * (tau - gam[i]) * (tau - gam[i]));
+				}
+
+				return std::reduce(pol.begin(), pol.end(), resulttype(0)) +
+					std::reduce(exp_.begin(), exp_.end(), resulttype(0)) +
+					std::reduce(gbs.begin(), gbs.end(), resulttype(0));
+			}
+
+			template<typename DELTATYPE, typename TAUTYPE, typename ALPHATYPE>
+			inline auto get_elongated_contribution(const DELTATYPE& delta, const TAUTYPE& tau, const ALPHATYPE& alpha) const {
+				using resulttype = std::common_type_t<DELTATYPE, TAUTYPE>;
+				// Calculate coefficients for elongated part
+				std::vector<resulttype> n_pol_m(t_pol_m.size()), n_exp_m(t_exp_m.size()), n_gbs_m(t_gbs_m.size());
+
+				for (size_t i = 0; i < t_pol_m.size(); i++) {
+					n_pol_m[i] = d1_pol[i] + d2_pol[i] * alpha + d3_pol[i] * alpha * alpha;
+				}
+				for (size_t i = 0; i < t_exp_m.size(); i++) {
+					n_exp_m[i] = d1_exp[i] + d2_exp[i] * alpha + d3_exp[i] * alpha * alpha;
+				}
+				for (size_t i = 0; i < t_gbs_m.size(); i++) {
+					n_gbs_m[i] = d1_gbs[i] + d2_gbs[i] * alpha + d3_gbs[i] * alpha * alpha;
+				}
+
+				std::vector<resulttype> pol_m(t_pol_m.size()), exp_m(t_exp_m.size()), gbs_m(t_gbs_m.size());
+				for (size_t i = 0; i < t_pol_m.size(); i++) {
+					pol_m[i] = n_pol_m[i] * pow(tau, t_pol_m[i]) * pow(delta, d_pol_m[i]);
+				}
+				for (size_t i = 0; i < t_exp_m.size(); i++) {
+					exp_m[i] = n_exp_m[i] * pow(tau, t_exp_m[i]) * pow(delta, d_exp_m[i]) * exp(-pow(delta, p_m[i]));
+				}
+				for (size_t i = 0; i < t_gbs_m.size(); i++) {
+					gbs_m[i] = n_gbs_m[i] * pow(tau, t_gbs_m[i]) * pow(delta, d_gbs_m[i]) * exp(-eta_m[i] * (delta - eps_m[i]) * (delta - eps_m[i]) - beta_m[i] * (tau - gam_m[i]) * (tau - gam_m[i]));
+				}
+
+				return std::reduce(pol_m.begin(), pol_m.end(), resulttype(0)) +
+					std::reduce(exp_m.begin(), exp_m.end(), resulttype(0)) +
+					std::reduce(gbs_m.begin(), gbs_m.end(), resulttype(0));
+			}
+
+
+			// Approximate the mixture with the one fluid model
+			template<typename TTYPE, typename RHOTYPE, typename MoleFracType>
+			auto one_fluid(TTYPE& Tstar, RHOTYPE& rhostar, MoleFracType& molefrac) const {
+
+				using resulttype = std::common_type_t<decltype(Tstar), decltype(molefrac[0]), decltype(rhostar)>;
+				resulttype lambda = 0.0;
+				resulttype sigma = 0.0;
+				resulttype epsilon = 0.0;
+				resulttype m = 0.0;
+				resulttype L_star = 0.0;
+				resulttype alpha = 0.0;
+				std::tie(sigma, epsilon, lambda, m, L_star) = combining_rules_one_fluid(rhostar, molefrac, fld, is_sphere, k_mat_lambda, k_mat_sigma, k_mat_epsilon, gammat, betat, gamma_dense, mix_rule);
+
+				resulttype tc = get_tc(epsilon, lambda, L_star);
+				resulttype dc = get_dc(sigma, lambda, L_star);
+
+				resulttype tau = tc / Tstar;
+				resulttype delta = rhostar / dc;
+
+				// Calculate coefficients for elongated part part
+				alpha = get_alpha(lambda, L_star);
+
+				resulttype alpha_r_sphere = get_spherical_contribution(delta, tau, lambda);
+				resulttype alpha_r_elong = get_elongated_contribution(delta, tau, alpha);
+
+				resulttype alpha_r_all = 0.0;
+				alpha_r_all = m * alpha_r_sphere + (m - 1.0) * alpha_r_elong;
+				return alpha_r_all;
+			}
+
+			// Approximate the mixture with corresponding states (classical approach)
+			template<typename TTYPE, typename RHOTYPE, typename MoleFracType>
+			auto cps_fluid(TTYPE& Tstar, RHOTYPE& rhostar, MoleFracType& molefrac) const {
+
+				using resulttype = std::common_type_t<decltype(Tstar), decltype(molefrac[0]), decltype(rhostar)>;
+				resulttype lambda = 0.0;
+				resulttype sigma = 0.0;
+				resulttype epsilon = 0.0;
+				resulttype m = 0.0;
+				resulttype L_star = 0.0;
+				resulttype alpha = 0.0;
+				resulttype tc_mix = 0.0;
+				resulttype dc_mix = 0.0;
+				resulttype tc = 0.0;
+				resulttype dc = 0.0;
+				resulttype tau = 0.0;
+				resulttype delta = 0.0;
+				std::vector< resulttype> sphere_contribution;
+				std::vector< resulttype> elong_contribution;
+
+				for (size_t i = 0; i < fld.size(); i++) {
+					tc = get_tc(fld[i].epsilons, fld[i].lambdas, fld[i].L_star);
+					dc = get_dc(fld[i].sigmas, fld[i].lambdas, fld[i].L_star);
+					tau = tc / Tstar;
+					delta = rhostar / dc;
+					if (fld[i].L_star > 0.0) {
+						alpha = get_alpha(fld[i].lambdas, fld[i].L_star);
+						elong_contribution.push_back(get_elongated_contribution(delta, tau, alpha));
+					}
+					sphere_contribution.push_back(get_spherical_contribution(delta, tau, fld[i].lambdas));
+				}
+
+				resulttype m_mix = 0.0;
+				resulttype ncomp = fld.size();
+				for (auto i = 0; i < fld.size(); i++) {
+					m_mix += fld[i].m * molefrac[i];
+				}
+				
+				resulttype alpha_r_sphere = 0.0; // std::reduce(elong_contribution.begin(), elong_contribution.end());
+				resulttype alpha_r_elong = 0.0;
+				resulttype alpha_r_all = 0.0;
+				for (auto i = 0; i < fld.size() - 1; i++) {
+					for (size_t j = i+1; j < fld.size(); j++) {
+						alpha_r_sphere += 2.0 * molefrac[i] * molefrac[j] * sphere_contribution[i];
+						alpha_r_elong  += 2.0 * molefrac[i] * molefrac[j] * elong_contribution[i];
+					}
+				}
+				for (auto i = 0; i < fld.size(); i++) {
+					alpha_r_sphere +=  molefrac[i] * molefrac[i] * sphere_contribution[i];
+					if (fld[i].L_star > 0.0) {
+						alpha_r_elong += molefrac[i] * molefrac[i] * elong_contribution[i];
+					}					
+				}
+				alpha_r_all = m_mix * alpha_r_sphere + (m_mix - 1.0) * alpha_r_elong;
+				return alpha_r_all;
+			}
+
+			// Input is temperature in K, density in mol/m^3 and molefractions
+			template<typename TTYPE, typename RHOTYPE, typename MoleFracType>
+			auto alphar(const TTYPE& Tstar, const RHOTYPE& rhostar, const MoleFracType& molefrac) const {
+				using resulttype = std::common_type_t<decltype(Tstar), decltype(molefrac[0]), decltype(rhostar)>;
+				resulttype alpha_r_all = 0.0;
+				if (mix_rule == STRUCTURE_BASED) {
+					alpha_r_all = cps_fluid(Tstar, rhostar, molefrac);
+				}
+				else
+				{
+					alpha_r_all = one_fluid(Tstar, rhostar, molefrac);
+				}
+
+				return forceeval(alpha_r_all);
+			}
+		};
+	}
+}
+
